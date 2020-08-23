@@ -4,10 +4,12 @@ from tensorflow.keras.initializers import he_normal
 
 """
 My implementation of W-Net (Hou et al., 2020)
-Please read "From W-Net to CDGAN: Bi-temporal Change Detection via Deep Learning Techniques" for details.
-
-Implemented by Sangwoo Ham
-Lab. for Sensor and Modeling, University of Seoul, Korea
+Read "From W-Net to CDGAN: Bi-temporal Change Detection via Deep Learning Techniques" for details.
+Please understand some configurations and hyper-parameters may be different from the paper.
+====================================================================================================
+Implemented by Sangwoo Ham, Ph.D student.
+Lab. for Sensor and Modeling, Dept. of Geoinformatics,
+University of Seoul, Korea
 """
 
 # Don't literally use these variables!
