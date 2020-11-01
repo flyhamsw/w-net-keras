@@ -1,6 +1,7 @@
+import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
-from tensorflow.keras.initializers import he_normal
+from tensorflow.keras.metrics import MeanIoU
 
 """
 My implementation of W-Net (Hou et al., 2020)
@@ -12,121 +13,95 @@ Lab. for Sensor and Modeling, Dept. of Geoinformatics,
 University of Seoul, Korea
 """
 
-# Don't literally use these variables!
-# Set input_image_shape, num_of_classes and bn considering your research goal.
-input_image_shape = (224, 224, 3)
-num_of_classes = 2
-bn = True
 
-input_1 = keras.Input(shape=input_image_shape)
-input_2 = keras.Input(shape=input_image_shape)
+def encoder_factory(input_channels, filters_1, filters_2, name):
+    # input = keras.Input(shape=input_image_shape)
+    input = keras.Input(shape=(None, None, input_channels))
+    z = layers.Conv2D(filters_1, 3, 1, 'same', kernel_initializer='he_normal')(input)
+    z = layers.BatchNormalization()(z)
+    z = layers.Activation('relu')(z)
+    z = layers.Conv2D(filters_2, 3, 2, 'same', kernel_initializer='he_normal')(z)
+    z = layers.BatchNormalization()(z)
+    z = layers.Activation('relu')(z)
+    return keras.Model(input, z, name=name)
 
-my_initializer = he_normal()
 
-conv_1_1 = layers.Convolution2D(64, 3, padding='same', kernel_initializer=my_initializer)(input_1)
-conv_1_1 = layers.BatchNormalization()(conv_1_1) if bn else conv_1_1
-conv_1_1 = layers.Activation('relu')(conv_1_1)
+def decoder_factory(input_channels, filters_1, filters_2, name, is_last=False):
+    # input = keras.Input(shape=input_image_shape)
+    input = keras.Input(shape=(None, None, input_channels))
+    z = layers.Convolution2DTranspose(filters_1, 3, 1, 'same', kernel_initializer='he_normal')(input)
+    z = layers.BatchNormalization()(z)
+    z = layers.Activation('relu')(z)
+    z = layers.Convolution2DTranspose(filters_2, 3, 2, 'same', kernel_initializer='he_normal')(z)
+    z = layers.BatchNormalization()(z)
+    if is_last:
+        z = layers.Activation('softmax')(z)
+    else:
+        z = layers.Activation('relu')(z)
+    return keras.Model(input, z, name=name)
 
-conv_1_2 = layers.Convolution2D(128, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_1_1)
-conv_1_2 = layers.BatchNormalization()(conv_1_2) if bn else conv_1_2
-conv_1_2 = layers.Activation('relu')(conv_1_2)
 
-conv_1_3 = layers.Convolution2D(256, 3, padding='same', kernel_initializer=my_initializer)(conv_1_2)
-conv_1_3 = layers.BatchNormalization()(conv_1_3) if bn else conv_1_3
-conv_1_3 = layers.Activation('relu')(conv_1_3)
+def build_w_net_siam(input_image_shape=(512, 512, 3), num_of_classes=2):
+    encoder_1 = encoder_factory(3, 64, 128, name='encoder_1')
+    encoder_2 = encoder_factory(128, 256, 512, name='encoder_2')
+    encoder_3 = encoder_factory(512, 512, 512, name='encoder_3')
+    encoder_4 = encoder_factory(512, 512, 512, name='encoder_4')
 
-conv_1_4 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_1_3)
-conv_1_4 = layers.BatchNormalization()(conv_1_4) if bn else conv_1_4
-conv_1_4 = layers.Activation('relu')(conv_1_4)
+    decoder_1 = decoder_factory(512+512, 512, 512, name='decoder_1')
+    decoder_2 = decoder_factory(512+512+512, 512, 512, name='decoder_2')
+    decoder_3 = decoder_factory(512+512+512, 256, 128, name='decoder_3')
+    decoder_4 = decoder_factory(128+128+128, 64, 2, name='decoder_4', is_last=True)
 
-conv_1_5 = layers.Convolution2D(512, 3, padding='same', kernel_initializer=my_initializer)(conv_1_4)
-conv_1_5 = layers.BatchNormalization()(conv_1_5) if bn else conv_1_5
-conv_1_5 = layers.Activation('relu')(conv_1_5)
+    input_1 = keras.Input(input_image_shape, name='input_1')
+    input_2 = keras.Input(input_image_shape, name='input_2')
 
-conv_1_6 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_1_5)
-conv_1_6 = layers.BatchNormalization()(conv_1_6) if bn else conv_1_6
-conv_1_6 = layers.Activation('relu')(conv_1_6)
+    encoded_img_1_conv_2 = encoder_1(input_1)
+    encoded_img_1_conv_4 = encoder_2(encoded_img_1_conv_2)
+    encoded_img_1_conv_6 = encoder_3(encoded_img_1_conv_4)
+    encoded_img_1_conv_8 = encoder_4(encoded_img_1_conv_6)
 
-conv_1_7 = layers.Convolution2D(512, 3, padding='same', kernel_initializer=my_initializer)(conv_1_6)
-conv_1_7 = layers.BatchNormalization()(conv_1_7) if bn else conv_1_7
-conv_1_7 = layers.Activation('relu')(conv_1_7)
+    encoded_img_2_conv_2 = encoder_1(input_2)
+    encoded_img_2_conv_4 = encoder_2(encoded_img_2_conv_2)
+    encoded_img_2_conv_6 = encoder_3(encoded_img_2_conv_4)
+    encoded_img_2_conv_8 = encoder_4(encoded_img_2_conv_6)
 
-conv_1_8 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_1_7)
-conv_1_8 = layers.BatchNormalization()(conv_1_8) if bn else conv_1_8
-conv_1_8 = layers.Activation('relu')(conv_1_8)
+    concat_1 = layers.Concatenate()([encoded_img_1_conv_8, encoded_img_2_conv_8])
 
-conv_2_1 = layers.Convolution2D(64, 3, padding='same', kernel_initializer=my_initializer)(input_2)
-conv_2_1 = layers.BatchNormalization()(conv_2_1) if bn else conv_2_1
-conv_2_1 = layers.Activation('relu')(conv_2_1)
+    deconv_2 = decoder_1(concat_1)
+    deconv_2 = layers.Concatenate(axis=-1)([deconv_2, encoded_img_1_conv_6, encoded_img_2_conv_6])
 
-conv_2_2 = layers.Convolution2D(128, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_2_1)
-conv_2_2 = layers.BatchNormalization()(conv_2_2) if bn else conv_2_2
-conv_2_2 = layers.Activation('relu')(conv_2_2)
+    deconv_4 = decoder_2(deconv_2)
+    deconv_4 = layers.Concatenate(axis=-1)([deconv_4, encoded_img_1_conv_4, encoded_img_2_conv_4])
 
-conv_2_3 = layers.Convolution2D(256, 3, padding='same', kernel_initializer=my_initializer)(conv_2_2)
-conv_2_3 = layers.BatchNormalization()(conv_2_3) if bn else conv_2_3
-conv_2_3 = layers.Activation('relu')(conv_2_3)
+    deconv_6 = decoder_3(deconv_4)
+    deconv_6 = layers.Concatenate(axis=-1)([deconv_6, encoded_img_1_conv_2, encoded_img_2_conv_2])
 
-conv_2_4 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_2_3)
-conv_2_4 = layers.BatchNormalization()(conv_2_4) if bn else conv_2_4
-conv_2_4 = layers.Activation('relu')(conv_2_4)
+    deconv_8 = decoder_4(deconv_6)
 
-conv_2_5 = layers.Convolution2D(512, 3, padding='same', kernel_initializer=my_initializer)(conv_2_4)
-conv_2_5 = layers.BatchNormalization()(conv_2_5) if bn else conv_2_5
-conv_2_5 = layers.Activation('relu')(conv_2_5)
+    # https://stackoverflow.com/questions/61824470/dimensions-mismatch-error-when-using-tf-metrics-meaniou-with-sparsecategorical
+    class SparseMeanIoU(MeanIoU):
+        def __init__(self,
+                     y_true=None,
+                     y_pred=None,
+                     num_classes=None,
+                     name=None,
+                     dtype=None):
+            super(SparseMeanIoU, self).__init__(num_classes=num_classes, name=name, dtype=dtype)
 
-conv_2_6 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_2_5)
-conv_2_6 = layers.BatchNormalization()(conv_2_6) if bn else conv_2_6
-conv_2_6 = layers.Activation('relu')(conv_2_6)
+        def update_state(self, y_true, y_pred, sample_weight=None):
+            y_pred = tf.math.argmax(y_pred, axis=-1)
+            return super().update_state(y_true, y_pred, sample_weight)
 
-conv_2_7 = layers.Convolution2D(512, 3, padding='same', kernel_initializer=my_initializer)(conv_2_6)
-conv_2_7 = layers.BatchNormalization()(conv_2_7) if bn else conv_2_7
-conv_2_7 = layers.Activation('relu')(conv_2_7)
+    model = keras.Model(inputs=(input_1, input_2), outputs=deconv_8)
+    model.compile(
+        optimizer=keras.optimizers.Adam(),
+        loss=keras.losses.SparseCategoricalCrossentropy(),
+        metrics=[SparseMeanIoU(num_classes=num_of_classes)]
+    )
 
-conv_2_8 = layers.Convolution2D(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(conv_2_7)
-conv_2_8 = layers.BatchNormalization()(conv_2_8) if bn else conv_2_8
-conv_2_8 = layers.Activation('relu')(conv_2_8)
+    return model
 
-concat_1 = layers.Concatenate(axis=-1)([conv_1_8, conv_2_8])
 
-deconv_1 = layers.Convolution2DTranspose(512, 3, padding='same', kernel_initializer=my_initializer)(concat_1)
-deconv_1 = layers.BatchNormalization()(deconv_1) if bn else deconv_1
-deconv_1 = layers.Activation('relu')(deconv_1)
-
-deconv_2 = layers.Convolution2DTranspose(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(deconv_1)
-deconv_2 = layers.BatchNormalization()(deconv_2) if bn else deconv_2
-deconv_2 = layers.Activation('relu')(deconv_2)
-
-deconv_2 = layers.Concatenate(axis=-1)([deconv_2, conv_1_6, conv_2_6])
-
-deconv_3 = layers.Convolution2DTranspose(512, 3, padding='same', kernel_initializer=my_initializer)(deconv_2)
-deconv_3 = layers.BatchNormalization()(deconv_3) if bn else deconv_3
-deconv_3 = layers.Activation('relu')(deconv_3)
-
-deconv_4 = layers.Convolution2DTranspose(512, 3, strides=2, padding='same', kernel_initializer=my_initializer)(deconv_3)
-deconv_4 = layers.BatchNormalization()(deconv_4) if bn else deconv_4
-deconv_4 = layers.Activation('relu')(deconv_4)
-
-deconv_4 = layers.Concatenate(axis=-1)([deconv_4, conv_1_4, conv_2_4])
-
-deconv_5 = layers.Convolution2DTranspose(256, 3, padding='same', kernel_initializer=my_initializer)(deconv_4)
-deconv_5 = layers.BatchNormalization()(deconv_5) if bn else deconv_5
-deconv_5 = layers.Activation('relu')(deconv_5)
-
-deconv_6 = layers.Convolution2DTranspose(128, 3, strides=2, padding='same', kernel_initializer=my_initializer)(deconv_5)
-deconv_6 = layers.BatchNormalization()(deconv_6) if bn else deconv_6
-deconv_6 = layers.Activation('relu')(deconv_6)
-
-deconv_6 = layers.Concatenate(axis=-1)([deconv_6, conv_1_2, conv_2_2])
-
-deconv_7 = layers.Convolution2DTranspose(num_of_classes, 3, strides=2, padding='same', kernel_initializer=my_initializer)(deconv_6)
-deconv_7 = layers.BatchNormalization()(deconv_7) if bn else deconv_7
-deconv_7 = layers.Activation('softmax')(deconv_7)
-
-model = keras.Model(inputs=(input_1, input_2), outputs=deconv_7)
-model.compile(
-    optimizer=keras.optimizers.Adam(),
-    loss=keras.losses.SparseCategoricalCrossentropy(),
-)
-
-print(model.summary())
+if __name__ == '__main__':
+    my_model = build_w_net_siam()
+    print(my_model.summary())
